@@ -13,6 +13,12 @@ contract DexPet is ERC721, ERC721URIStorage {
         Bird
     }
 
+    enum BidStatus {
+        Open,
+        Closed,
+        Cancelled
+    }
+
     constructor() ERC721("DexPet", "DPET") {
         owner = msg.sender;
     }
@@ -30,10 +36,6 @@ contract DexPet is ERC721, ERC721URIStorage {
         Category petCategory;
         address adopter;
     }
-
-    mapping(uint256 => Pet) public petIdToPets; // mapping to store pets by their ID
-    uint256 public petId; // variable to keep track of the number of pets
-
     struct Auction {
         uint256 petId;
         uint256 startingPrice;
@@ -42,8 +44,22 @@ contract DexPet is ERC721, ERC721URIStorage {
         uint256 endTime;
         bool isActive;
     }
+    struct Bid {
+        uint256 bidId;
+        uint256 petId;
+        uint256 amountBidded;
+        address bidder;
+        BidStatus bid_status;
+    }
 
-    mapping(uint256 => Auction) public petIdToAuction;
+    mapping(uint256 => Pet) public petIdToPets; // mapping to store pets by their ID.
+    mapping(uint256 => Auction) public petIdToAuction; //Mapping Auction to PetID.
+    mapping(address => Bid[]) public userToBids; //Mapping users to bids.
+    mapping(uint256 => mapping(address => Bid[])) public petIdToUserBids; //Mapping petId => userAddress => bids
+    mapping(uint256 => Bid[]) public petIdToBids; //Mapping petId to bids
+
+    uint256 public petId; // variable to keep track of the number of pets
+    uint256 public totalBids; // variable to keep track of the number of total bids
 
     event AuctionCreated(
         uint256 indexed petId,
@@ -53,9 +69,6 @@ contract DexPet is ERC721, ERC721URIStorage {
     event BidPlaced(uint256 indexed petId, address bidder, uint256 amount);
     event AuctionEnded(uint256 indexed petId, address winner, uint256 amount);
     event NFTMinted(uint256 _petId, address highestBidder, uint256 tokenId);
-
-    address public owner;
-
     event PetAdded(
         uint256 indexed petId,
         string name,
@@ -67,6 +80,9 @@ contract DexPet is ERC721, ERC721URIStorage {
         string description,
         Category category
     );
+    event BidCancelled(uint256 indexed petId, address bidder, uint256 amount);
+
+    address public owner;
 
     function addPet(
         string memory name,
@@ -132,7 +148,15 @@ contract DexPet is ERC721, ERC721URIStorage {
     function placeBid(uint256 _petId) public payable {
         Auction storage auction = petIdToAuction[_petId];
         require(auction.isActive, "Auction is not active");
+        require(
+            petIdToPets[_petId].isAdopted == false,
+            "Pet is already adopted"
+        );
         require(block.timestamp < auction.endTime, "Auction has ended");
+        require(
+            petIdToUserBids[_petId][msg.sender].length == 0,
+            "You have already bid on this pet"
+        );
         require(
             msg.value > auction.highestBid,
             "Bid must be higher than current highest bid"
@@ -146,10 +170,51 @@ contract DexPet is ERC721, ERC721URIStorage {
             require(success, "Failed to refund previous highest bidder");
         }
 
+        //Generate a unique bid ID for the user
+        uint256 userBidId = userToBids[msg.sender].length + 1;
+        Bid storage bid = userToBids[msg.sender][userBidId];
+        bid.bidId = userBidId;
+        bid.petId = _petId;
+        bid.amountBidded = msg.value;
+        bid.bidder = msg.sender;
+        bid.bid_status = BidStatus.Open;
+        userToBids[msg.sender].push(bid);
+
+        petIdToUserBids[_petId][msg.sender].push(bid);
+        petIdToBids[_petId].push(bid);
+
+        //Increment total bids
+        totalBids++;
+
         auction.highestBid = msg.value;
         auction.highestBidder = msg.sender;
 
         emit BidPlaced(_petId, msg.sender, msg.value);
+    }
+
+    function cancelBid(uint256 _petId, uint256 _bidId) public {
+        require(
+            petIdToUserBids[_petId][msg.sender].length > 0,
+            "You have not bid on this pet"
+        );
+        require(
+            petIdToUserBids[_petId][msg.sender][_bidId].bid_status ==
+                BidStatus.Open,
+            "Your bid is not open"
+        );
+        petIdToUserBids[_petId][msg.sender][_bidId].bid_status = BidStatus
+            .Cancelled;
+
+        //Refund the bid amount to the bidder
+        (bool success, ) = payable(msg.sender).call{
+            value: petIdToUserBids[_petId][msg.sender][_bidId].amountBidded
+        }("");
+        require(success, "Failed to refund previous highest bidder");
+        emit BidCancelled(
+            _petId,
+            msg.sender,
+            petIdToUserBids[_petId][msg.sender][_bidId].amountBidded
+        );
     }
 
     function endAuction(uint256 _petId) public onlyOwner {
