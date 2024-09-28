@@ -16,6 +16,7 @@ library Errors {
     error PetIsInOpenBid();
     error NoActivePetBid();
     error YourBidIsNotOpen();
+    
 
     error StartPriceMustBeZero();
 }   
