@@ -18,7 +18,7 @@ library Errors {
     error YourBidIsNotOpen();
     
 
-    error StartPriceMustBeZero();
+    error StartPriceCannotZero();
 }   
 
 library Events {

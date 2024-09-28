@@ -150,8 +150,8 @@ contract DexPet is ERC721, ERC721URIStorage {
         }
 
         // why?
-        if (_startingPrice >= 0) {
-            revert Errors.StartPriceMustBeZero();
+        if (_startingPrice <= 0) {
+            revert Errors.StartPriceCannotZero();
         }
 
         if (_auctionDuration <= 0) {
