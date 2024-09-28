@@ -88,7 +88,7 @@ contract DexPet is ERC721, ERC721URIStorage {
     // @user: only Owner functions
     function addPet(
         string memory name,
-        uint256 breed,
+        uint256 breed,  // why is breed a uint
         string memory color,
         uint256 price,
         string memory picture,
@@ -127,6 +127,8 @@ contract DexPet is ERC721, ERC721URIStorage {
         );
     }
 
+// an owner can list one pet multiple times on aunction
+
     function listPetForAuction(
         uint256 _petId,
         uint256 _startingPrice,
@@ -135,14 +137,21 @@ contract DexPet is ERC721, ERC721URIStorage {
         sanityCheck();
         onlyOwner();
 
+        Pet memory pet = petIdToPets[_petId];
         // what if a user tries to list a pet that is in auction?
-        if (petIdToPets[_petId].isAdopted) {
+        Auction memory auction = petIdToAuction[_petId];
+
+        if(auction.isActive){
+            revert Errors.PetIsInOpenBid();
+        }
+
+        if (pet.isAdopted) {
             revert Errors.PetAlreadyAdopted();
         }
 
         // why?
-        if (_startingPrice >= 0) {
-            revert Errors.StartPriceMustBeZero();
+        if (_startingPrice <= 0) {
+            revert Errors.StartPriceCannotZero();
         }
 
         if (_auctionDuration <= 0) {
@@ -167,7 +176,7 @@ contract DexPet is ERC721, ERC721URIStorage {
         sanityCheck();
         onlyOwner();
 
-        Auction storage auction = petIdToAuction[_petId];
+        Auction memory auction = petIdToAuction[_petId];
 
         if (!auction.isActive) {
             revert Errors.AuctionNotActive();
@@ -188,7 +197,7 @@ contract DexPet is ERC721, ERC721URIStorage {
             Bid storage bid = petIdToUserBids[_petId][auction.highestBidder][
                 _bidId
             ];
-            auction.isActive = false;
+            petIdToAuction[_petId].isActive = false;
             bid.bid_status = BidStatus.Accepted;
             userToBids[auction.highestBidder][_bidId].bid_status = BidStatus
                 .Accepted;
@@ -365,6 +374,7 @@ contract DexPet is ERC721, ERC721URIStorage {
     }
 
     function getAdoptedPets() external view returns (Pet[] memory) {
+        onlyOwner();
         Pet[] memory _petListings = new Pet[](petId);
         uint256 count = 0;
         for (uint256 i = 0; i < petId; i++) {
@@ -395,97 +405,6 @@ contract DexPet is ERC721, ERC721URIStorage {
         return userToBids[_user].length;
     }
 
-    function getUserOpenBids(
-        address _user
-    ) external view returns (Bid[] memory) {
-        uint256 openBidsCount = 0;
-        for (uint256 i = 0; i < userToBids[_user].length; i++) {
-            if (userToBids[_user][i].bid_status == BidStatus.Open) {
-                openBidsCount++;
-            }
-        }
-
-        Bid[] memory _openBids = new Bid[](openBidsCount);
-
-        uint256 index = 0;
-        for (uint256 i = 0; i < userToBids[_user].length; i++) {
-            if (userToBids[_user][i].bid_status == BidStatus.Open) {
-                _openBids[index] = userToBids[_user][i];
-                index++;
-            }
-        }
-
-        return _openBids;
-    }
-
-    // function getUserCancelledBids(
-    //     address _user
-    // ) external view returns (Bid[] memory) {
-    //     uint256 cancelledBidsCount = 0;
-    //     for (uint256 i = 0; i < userToBids[_user].length; i++) {
-    //         if (userToBids[_user][i].bid_status == BidStatus.Cancelled) {
-    //             cancelledBidsCount++;
-    //         }
-    //     }
-
-    //     Bid[] memory _cancelledBids = new Bid[](cancelledBidsCount);
-
-    //     uint256 index = 0;
-    //     for (uint256 i = 0; i < userToBids[_user].length; i++) {
-    //         if (userToBids[_user][i].bid_status == BidStatus.Cancelled) {
-    //             _cancelledBids[index] = userToBids[_user][i];
-    //             index++;
-    //         }
-    //     }
-
-    //     return _cancelledBids;
-    // }
-
-    // function getUserRejectedBids(
-    //     address _user
-    // ) external view returns (Bid[] memory) {
-    //     uint256 rejectedBidsCount = 0;
-    //     for (uint256 i = 0; i < userToBids[_user].length; i++) {
-    //         if (userToBids[_user][i].bid_status == BidStatus.Rejected) {
-    //             rejectedBidsCount++;
-    //         }
-    //     }
-
-    //     Bid[] memory _rejectedBids = new Bid[](rejectedBidsCount);
-
-    //     uint256 index = 0;
-    //     for (uint256 i = 0; i < userToBids[_user].length; i++) {
-    //         if (userToBids[_user][i].bid_status == BidStatus.Rejected) {
-    //             _rejectedBids[index] = userToBids[_user][i];
-    //             index++;
-    //         }
-    //     }
-
-    //     return _rejectedBids;
-    // }
-
-    // function getUserAcceptedBids(
-    //     address _user
-    // ) external view returns (Bid[] memory) {
-    //     uint256 acceptedBidsCount = 0;
-    //     for (uint256 i = 0; i < userToBids[_user].length; i++) {
-    //         if (userToBids[_user][i].bid_status == BidStatus.Accepted) {
-    //             acceptedBidsCount++;
-    //         }
-    //     }
-
-    //     Bid[] memory _acceptedBids = new Bid[](acceptedBidsCount);
-
-    //     uint256 index = 0;
-    //     for (uint256 i = 0; i < userToBids[_user].length; i++) {
-    //         if (userToBids[_user][i].bid_status == BidStatus.Accepted) {
-    //             _acceptedBids[index] = userToBids[_user][i];
-    //             index++;
-    //         }
-    //     }
-
-    //     return _acceptedBids;
-    // }
 
     // @dev: inner functions
 
