@@ -51,9 +51,11 @@ contract DexPet is ERC721, ERC721URIStorage {
         BidStatus bid_status;
     }
 
-    mapping(uint256 => Pet) private petIdToPets; // mapping to store pets by their ID.
+    mapping(uint256 => Pet) private petIdToPet; // mapping to store pets by their ID.
 
     mapping(uint256 => Auction) private petIdToAuction; //Mapping Auction to PetID.
+
+    Auction[] private allPetAuctions;
 
     mapping(address => Bid[]) private userToBids; //Mapping users to bids.
 
@@ -88,7 +90,7 @@ contract DexPet is ERC721, ERC721URIStorage {
     // @user: only Owner functions
     function addPet(
         string memory name,
-        uint256 breed,  // why is breed a uint
+        uint256 breed, // why is breed a uint
         string memory color,
         uint256 price,
         string memory picture,
@@ -100,7 +102,7 @@ contract DexPet is ERC721, ERC721URIStorage {
         onlyOwner();
 
         petId++;
-        petIdToPets[petId] = Pet(
+        petIdToPet[petId] = Pet(
             petId,
             name,
             breed,
@@ -127,7 +129,7 @@ contract DexPet is ERC721, ERC721URIStorage {
         );
     }
 
-// an owner can list one pet multiple times on aunction
+    // an owner can list one pet multiple times on aunction
 
     function listPetForAuction(
         uint256 _petId,
@@ -137,11 +139,11 @@ contract DexPet is ERC721, ERC721URIStorage {
         sanityCheck();
         onlyOwner();
 
-        Pet memory pet = petIdToPets[_petId];
+        Pet memory pet = petIdToPet[_petId];
         // what if a user tries to list a pet that is in auction?
         Auction memory auction = petIdToAuction[_petId];
 
-        if(auction.isActive){
+        if (auction.isActive) {
             revert Errors.PetIsInOpenBid();
         }
 
@@ -160,7 +162,7 @@ contract DexPet is ERC721, ERC721URIStorage {
 
         uint256 endTime = block.timestamp + _auctionDuration;
 
-        petIdToAuction[_petId] = Auction({
+        Auction memory newAuction = Auction({
             petId: _petId,
             startingPrice: _startingPrice,
             highestBid: 0,
@@ -169,10 +171,13 @@ contract DexPet is ERC721, ERC721URIStorage {
             isActive: true
         });
 
+        petIdToAuction[_petId] = newAuction;
+        allPetAuctions.push(newAuction);
+
         emit Events.AuctionCreated(_petId, _startingPrice, endTime);
     }
 
-    function endAuction(uint256 _petId, uint256 _bidId) external {
+    function endAuction(uint256 _petId) external {
         sanityCheck();
         onlyOwner();
 
@@ -187,41 +192,22 @@ contract DexPet is ERC721, ERC721URIStorage {
             revert Errors.AuctionIsActive();
         }
 
+        uint256 currentHighestBidId = petIdToBids[petId].length;
+
         if (auction.highestBidder != address(0)) {
-            Pet storage pet = petIdToPets[_petId];
+            Pet storage pet = petIdToPet[_petId];
             pet.isAdopted = true;
             pet.price = auction.highestBid;
             pet.adopter = auction.highestBidder;
 
             // Update the bid status to accepted
             Bid storage bid = petIdToUserBids[_petId][auction.highestBidder][
-                _bidId
+                currentHighestBidId
             ];
             petIdToAuction[_petId].isActive = false;
             bid.bid_status = BidStatus.Accepted;
-            userToBids[auction.highestBidder][_bidId].bid_status = BidStatus
-                .Accepted;
-
-            // Set other bids to rejected
-            for (uint256 i = 0; i < petIdToBids[_petId].length; i++) {
-                Bid storage petBid = petIdToBids[_petId][i];
-                Bid storage UserPet = userToBids[auction.highestBidder][i];
-                if (
-                    petBid.bidder != auction.highestBidder &&
-                    petBid.bid_status == BidStatus.Open
-                ) {
-                    petBid.bid_status = BidStatus.Rejected;
-                    UserPet.bid_status = BidStatus.Rejected;
-                }
-            }
-
-            (bool success, ) = payable(auction.highestBidder).call{
-                value: auction.highestBid
-            }("");
-
-            if (!success) {
-                revert Errors.PrevBidderRefundFailed();
-            }
+            userToBids[auction.highestBidder][currentHighestBidId]
+                .bid_status = BidStatus.Accepted;
 
             // Mint NFT to the highest bidder
             _safeMint(auction.highestBidder, _petId);
@@ -234,6 +220,7 @@ contract DexPet is ERC721, ERC721URIStorage {
                 auction.highestBid
             );
         } else {
+            petIdToAuction[_petId].isActive = false;
             emit Events.AuctionEnded(_petId, address(0), 0);
         }
     }
@@ -243,7 +230,7 @@ contract DexPet is ERC721, ERC721URIStorage {
     function placeBid(uint256 _petId) external payable {
         sanityCheck();
 
-        Auction storage auction = petIdToAuction[_petId];
+        Auction memory auction = petIdToAuction[_petId];
 
         // why
         if (auction.petId == 0) {
@@ -254,7 +241,7 @@ contract DexPet is ERC721, ERC721URIStorage {
             revert Errors.AuctionNotActive();
         }
 
-        if (petIdToPets[_petId].isAdopted) {
+        if (petIdToPet[_petId].isAdopted) {
             revert Errors.PetAlreadyAdopted();
         }
 
@@ -266,8 +253,20 @@ contract DexPet is ERC721, ERC721URIStorage {
             revert Errors.BidTooLow();
         }
 
+        //Get the Id of the prev bidder
+
+        uint256 prevBidId = petIdToBids[petId].length;
+        uint256 prevUserBidId = userToBids[auction.highestBidder].length;
+
         if (auction.highestBidder != address(0)) {
+            // I guess there's a reentrancy flaw here or maybe I've fixed it
+
             // Refund the previous highest bidder
+
+            petIdToBids[_petId][prevBidId - 1].bid_status = BidStatus.Rejected;
+            userToBids[auction.highestBidder][prevUserBidId - 1]
+                .bid_status = BidStatus.Rejected;
+
             (bool success, ) = payable(auction.highestBidder).call{
                 value: auction.highestBid
             }("");
@@ -277,28 +276,8 @@ contract DexPet is ERC721, ERC721URIStorage {
             }
         }
 
-        // Check if the user has any open bids for this pet. Allow user to re-enter bid if they have cancelled previous bid
-        bool hasOpenBid = false;
-        uint256 userBidsLength = petIdToUserBids[_petId][msg.sender].length;
-        for (uint256 i = 0; i < userBidsLength; i++) {
-            if (
-                petIdToUserBids[_petId][msg.sender][i].bid_status ==
-                BidStatus.Open
-            ) {
-                hasOpenBid = true;
-                break;
-            }
-        }
-
-        if (hasOpenBid) {
-            revert Errors.PetIsInOpenBid();
-        }
-
-        //Generate a unique bid ID for the user
-        uint256 userBidId = userToBids[msg.sender].length + 1;
-
         Bid memory newBid = Bid({
-            bidId: userBidId,
+            bidId: prevUserBidId + 1,
             petId: _petId,
             amountBidded: msg.value,
             bidder: msg.sender,
@@ -308,13 +287,14 @@ contract DexPet is ERC721, ERC721URIStorage {
         userToBids[msg.sender].push(newBid);
 
         petIdToUserBids[_petId][msg.sender].push(newBid);
+
         petIdToBids[_petId].push(newBid);
 
         //Increment total bids
         totalBids++;
 
-        auction.highestBid = msg.value;
-        auction.highestBidder = msg.sender;
+        petIdToAuction[_petId].highestBid = msg.value;
+        petIdToAuction[_petId].highestBidder = msg.sender;
 
         emit Events.BidPlaced(_petId, msg.sender, msg.value);
     }
@@ -360,17 +340,20 @@ contract DexPet is ERC721, ERC721URIStorage {
         emit Events.BidCancelled(_petId, msg.sender, bid.amountBidded);
     }
 
-    //For Pet Lovers
-    function getUnadoptedPets() external view returns (Pet[] memory) {
-        Pet[] memory _petListings = new Pet[](petId);
-        uint256 count = 0;
-        for (uint256 i = 0; i < petId; i++) {
-            if (petIdToPets[i + 1].isAdopted == false) {
-                _petListings[count] = petIdToPets[i + 1];
-                count++;
-            }
-        }
-        return _petListings;
+    // @dev: getter functions
+
+    function getPet(uint256 _petId) external view returns (Pet memory) {
+        return petIdToPet[_petId];
+    }
+
+    function getPetAuction(
+        uint256 _petId
+    ) external view returns (Auction memory) {
+        return petIdToAuction[_petId];
+    }
+
+    function getAllAuctions() external view returns(Auction[] memory){
+        return allPetAuctions;
     }
 
     function getAdoptedPets() external view returns (Pet[] memory) {
@@ -378,16 +361,12 @@ contract DexPet is ERC721, ERC721URIStorage {
         Pet[] memory _petListings = new Pet[](petId);
         uint256 count = 0;
         for (uint256 i = 0; i < petId; i++) {
-            if (petIdToPets[i + 1].isAdopted == true) {
-                _petListings[count] = petIdToPets[i + 1];
+            if (petIdToPet[i + 1].isAdopted == true) {
+                _petListings[count] = petIdToPet[i + 1];
                 count++;
             }
         }
         return _petListings;
-    }
-
-    function getPetListing(uint256 _petId) external view returns (Pet memory) {
-        return petIdToPets[_petId];
     }
 
     function getPetBids(uint256 _petId) external view returns (Bid[] memory) {
@@ -404,7 +383,6 @@ contract DexPet is ERC721, ERC721URIStorage {
     function getUserBidsLength(address _user) external view returns (uint256) {
         return userToBids[_user].length;
     }
-
 
     // @dev: inner functions
 
